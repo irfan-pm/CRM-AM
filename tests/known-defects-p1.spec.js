@@ -332,4 +332,27 @@ test.describe('Hisab Kitab 360 - External bug-list verification (P1)', () => {
     // the absurd value is accepted verbatim.
     await expect(page.locator('input[name="tax_percentage"]')).not.toHaveValue('10120018');
   });
+
+  // DEF-08 (POS Invoicing list): doc reports the list is always empty
+  // because it queries pos_invoice while POS sales are stored as
+  // digital_invoice. NOT REPRODUCIBLE on this account - a freshly saved POS
+  // sale correctly appears in the POS Invoicing list, both via search and
+  // on a fresh unfiltered page load.
+  test('DEF-08: a saved POS Invoice appears in the POS Invoicing list', async ({ page }) => {
+    const name = `QA3_DEF08_${Date.now()}`;
+    await page.goto('/pos_invoicing/add_pos_invoicing');
+    await page.getByLabel('Name', { exact: true }).fill(name);
+    await addPosProduct(page, 1);
+    await fillReceivedAmount(page, 10_000);
+    await page.getByRole('button', { name: 'SAVE & EXIT' }).click();
+    await expect(page).toHaveURL(/\/pos_invoicing$/, { timeout: 15_000 });
+
+    await page.goto('/pos_invoicing');
+    await page.waitForTimeout(1_500);
+    await expect(page.locator('tbody tr').first()).toBeVisible({ timeout: 10_000 });
+    const searchBox = page.locator('input[type="text"]').first();
+    await searchBox.fill(name);
+    await page.waitForTimeout(1_000);
+    await expect(page.locator('tbody tr', { hasText: name })).toBeVisible({ timeout: 10_000 });
+  });
 });
