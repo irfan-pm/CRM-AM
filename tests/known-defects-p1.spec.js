@@ -13,6 +13,21 @@ const { login } = require('./utils/auth');
 const KNOWN_PRODUCT = 'Test panadol';
 const KNOWN_CUSTOMER = 'Co-work';
 const KNOWN_SALE_PRODUCT = 'Johathan Bauch';
+const KNOWN_SUPPLIER = 'Allah Ditta';
+
+async function openStockInHandRow(page, productName) {
+  await page.goto('/stock-in-hand');
+  await page.waitForTimeout(1_000);
+  for (let i = 0; i < 3 && await page.getByText('No Data Exist').isVisible().catch(() => false); i++) {
+    await page.reload();
+    await page.waitForTimeout(1_500);
+  }
+  await page.getByPlaceholder('Search stock...').fill(productName);
+  await page.waitForTimeout(1_000);
+  const row = page.locator('tbody tr', { hasText: productName }).first();
+  await expect(row).toBeVisible({ timeout: 10_000 });
+  return row;
+}
 
 function amountInputNear(page, labelText) {
   return page.locator(`text=${labelText}`).locator('xpath=following::input[1]');
@@ -147,5 +162,71 @@ test.describe('Hisab Kitab 360 - External bug-list verification (P1)', () => {
     // that should still apply = Rs 676. Buggy actual: Rs 476 (delivery
     // dropped entirely).
     await expect(page.locator('tbody tr').first()).toContainText('676.00');
+  });
+
+  // DEF-03 (Purchase → stock cost) [KNOWN BUG]: a line-item discount % on a
+  // Shipment is correctly calculated and shown on the shipment form itself
+  // (Net Amount = Rate x Qty, minus the discount), but that discount is
+  // silently ignored when the stock's Purchasing Avg Price / Purchasing
+  // Cost is computed on Stock In Hand - it uses the full pre-discount rate
+  // instead. This test encodes the CORRECT discounted values and will fail
+  // until fixed.
+  test('DEF-03: Stock In Hand reflects a Shipment line-item discount in the average purchase price [KNOWN BUG]', async ({ page }) => {
+    const name = `QA3_DEF03_${Date.now()}`;
+    await page.goto('/products');
+    await page.getByRole('button', { name: 'ADD PRODUCT' }).click();
+    await expect(page.getByRole('heading', { name: 'Add Product' })).toBeVisible({ timeout: 10_000 });
+    await page.locator('input[name="product_name"]').fill(name);
+    await page.locator('input[name="incl_tax"]').fill('2000');
+    await page.getByRole('button', { name: 'SUBMIT' }).click();
+    await page.waitForTimeout(2_000);
+
+    await page.goto('/suppliers');
+    await page.getByPlaceholder('Search supplier...').fill(KNOWN_SUPPLIER);
+    await page.waitForTimeout(500);
+    const supRow = page.locator('tbody tr', { hasText: KNOWN_SUPPLIER }).first();
+    await supRow.locator('.table-menu-more-option').click();
+    await expect(page.getByText('Details', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.getByText('Details', { exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Supplier Details' })).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('button', { name: 'ADD SHIPMENT' }).click();
+    await expect(page.getByRole('heading', { name: 'Add Shipment' })).toBeVisible({ timeout: 10_000 });
+    await page.locator('input[name="shipment_title"]').fill(`QA3_DEF03_Shipment_${Date.now()}`);
+
+    const productInput = page.getByRole('combobox', { name: 'Product Name' });
+    for (let i = 1; i <= 4; i++) {
+      await productInput.click();
+      await productInput.fill('');
+      await productInput.fill(name);
+      await page.waitForTimeout(700);
+      const option = page.getByText(name, { exact: true }).last();
+      const visible = await option.waitFor({ state: 'visible', timeout: 8_000 }).then(() => true).catch(() => false);
+      if (!visible) { await page.waitForTimeout(800); continue; }
+      await option.click();
+      await page.waitForTimeout(500);
+      if (await page.locator('input[name="quantity"]').isEnabled().catch(() => false)) break;
+    }
+    await page.locator('input[name="quantity"]').fill('3');
+    await page.locator('input[name="selling_price_excluding_tax"]').fill('1000');
+    // Manufacturer Batch No is mandatory on this account's current settings.
+    await page.locator('input[name="manufacturer_batch_no"]').fill(`BATCH_${Date.now()}`);
+    await page.locator('input[name="discount_percentage"]').fill('2');
+    await page.waitForTimeout(400);
+
+    // The shipment line correctly computes the discount amount itself:
+    // 2% of (3 x Rs 1000) = Rs 60.
+    await expect(page.locator('input[name="discount_amount"]')).toHaveValue('60');
+
+    await page.getByRole('button', { name: 'ADD ITEM' }).click();
+    await expect(page.getByText('No Item found')).not.toBeVisible();
+    await page.getByRole('button', { name: 'SUBMIT' }).click();
+    await expect(page).toHaveURL(/\/suppliers/, { timeout: 15_000 });
+
+    const stockRow = await openStockInHandRow(page, name);
+    // Correct: average purchase price should reflect the 2% discount
+    // (Rs 980/unit, Rs 2,940 total). Buggy actual: Rs 1,000/unit, Rs 3,000
+    // total - the discount is dropped entirely in this calculation.
+    await expect(stockRow).toContainText('Purchasing Avg Price: ₨980.00');
+    await expect(stockRow).toContainText('Purchasing Cost: ₨2,940.00');
   });
 });
