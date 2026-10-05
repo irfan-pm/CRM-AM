@@ -229,4 +229,107 @@ test.describe('Hisab Kitab 360 - External bug-list verification (P1)', () => {
     await expect(stockRow).toContainText('Purchasing Avg Price: ₨980.00');
     await expect(stockRow).toContainText('Purchasing Cost: ₨2,940.00');
   });
+
+  // DEF-04 (Purchase line, tax) [KNOWN BUG], part 1: typing a Tax % on a
+  // Shipment line should compute tax ON TOP of the entered Rate, leaving
+  // Rate unchanged. CONFIRMED: typing 18% after Rate 1200 instead REWRITES
+  // Rate to 1016.95 (it back-calculates as if 1200 were tax-inclusive).
+  test('DEF-04a: typing a Shipment line Tax % does not rewrite the entered Rate [KNOWN BUG]', async ({ page }) => {
+    const name = `QA3_DEF04a_${Date.now()}`;
+    await page.goto('/products');
+    await page.getByRole('button', { name: 'ADD PRODUCT' }).click();
+    await expect(page.getByRole('heading', { name: 'Add Product' })).toBeVisible({ timeout: 10_000 });
+    await page.locator('input[name="product_name"]').fill(name);
+    await page.locator('input[name="incl_tax"]').fill('2000');
+    await page.getByRole('button', { name: 'SUBMIT' }).click();
+    await page.waitForTimeout(2_000);
+
+    await page.goto('/suppliers');
+    await page.getByPlaceholder('Search supplier...').fill(KNOWN_SUPPLIER);
+    await page.waitForTimeout(500);
+    const supRow = page.locator('tbody tr', { hasText: KNOWN_SUPPLIER }).first();
+    await supRow.locator('.table-menu-more-option').click();
+    await expect(page.getByText('Details', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.getByText('Details', { exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Supplier Details' })).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('button', { name: 'ADD SHIPMENT' }).click();
+    await expect(page.getByRole('heading', { name: 'Add Shipment' })).toBeVisible({ timeout: 10_000 });
+    await page.locator('input[name="shipment_title"]').fill(`QA3_DEF04a_Shipment_${Date.now()}`);
+
+    const productInput = page.getByRole('combobox', { name: 'Product Name' });
+    for (let i = 1; i <= 4; i++) {
+      await productInput.click();
+      await productInput.fill('');
+      await productInput.fill(name);
+      await page.waitForTimeout(700);
+      const option = page.getByText(name, { exact: true }).last();
+      const visible = await option.waitFor({ state: 'visible', timeout: 8_000 }).then(() => true).catch(() => false);
+      if (!visible) { await page.waitForTimeout(800); continue; }
+      await option.click();
+      await page.waitForTimeout(500);
+      if (await page.locator('input[name="quantity"]').isEnabled().catch(() => false)) break;
+    }
+    await page.locator('input[name="quantity"]').fill('1');
+    await page.locator('input[name="manufacturer_batch_no"]').fill(`BATCH_${Date.now()}`);
+    await page.locator('input[name="selling_price_excluding_tax"]').fill('1200');
+    await page.waitForTimeout(400);
+
+    await page.locator('input[name="tax_percentage"]').fill('18');
+    await page.waitForTimeout(500);
+
+    // Correct: Rate should stay 1200 regardless of tax entered. Buggy
+    // actual: Rate is rewritten to 1016.95.
+    await expect(page.locator('input[name="selling_price_excluding_tax"]')).toHaveValue('1200');
+  });
+
+  // DEF-04 (Purchase line, tax) [KNOWN BUG], part 2: Tax % should be limited
+  // to 0-100. CONFIRMED: the field accepts an arbitrary huge number
+  // (10,120,018%) with no validation at all.
+  test('DEF-04b: Shipment line Tax % rejects values outside 0-100 [KNOWN BUG]', async ({ page }) => {
+    const name = `QA3_DEF04b_${Date.now()}`;
+    await page.goto('/products');
+    await page.getByRole('button', { name: 'ADD PRODUCT' }).click();
+    await expect(page.getByRole('heading', { name: 'Add Product' })).toBeVisible({ timeout: 10_000 });
+    await page.locator('input[name="product_name"]').fill(name);
+    await page.locator('input[name="incl_tax"]').fill('2000');
+    await page.getByRole('button', { name: 'SUBMIT' }).click();
+    await page.waitForTimeout(2_000);
+
+    await page.goto('/suppliers');
+    await page.getByPlaceholder('Search supplier...').fill(KNOWN_SUPPLIER);
+    await page.waitForTimeout(500);
+    const supRow = page.locator('tbody tr', { hasText: KNOWN_SUPPLIER }).first();
+    await supRow.locator('.table-menu-more-option').click();
+    await expect(page.getByText('Details', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.getByText('Details', { exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Supplier Details' })).toBeVisible({ timeout: 10_000 });
+    await page.getByRole('button', { name: 'ADD SHIPMENT' }).click();
+    await expect(page.getByRole('heading', { name: 'Add Shipment' })).toBeVisible({ timeout: 10_000 });
+    await page.locator('input[name="shipment_title"]').fill(`QA3_DEF04b_Shipment_${Date.now()}`);
+
+    const productInput = page.getByRole('combobox', { name: 'Product Name' });
+    for (let i = 1; i <= 4; i++) {
+      await productInput.click();
+      await productInput.fill('');
+      await productInput.fill(name);
+      await page.waitForTimeout(700);
+      const option = page.getByText(name, { exact: true }).last();
+      const visible = await option.waitFor({ state: 'visible', timeout: 8_000 }).then(() => true).catch(() => false);
+      if (!visible) { await page.waitForTimeout(800); continue; }
+      await option.click();
+      await page.waitForTimeout(500);
+      if (await page.locator('input[name="quantity"]').isEnabled().catch(() => false)) break;
+    }
+    await page.locator('input[name="quantity"]').fill('1');
+    await page.locator('input[name="manufacturer_batch_no"]').fill(`BATCH_${Date.now()}`);
+    await page.locator('input[name="selling_price_excluding_tax"]').fill('1200');
+    await page.waitForTimeout(400);
+
+    await page.locator('input[name="tax_percentage"]').fill('10120018');
+    await page.waitForTimeout(400);
+
+    // Correct: should be clamped/rejected to the 0-100 range. Buggy actual:
+    // the absurd value is accepted verbatim.
+    await expect(page.locator('input[name="tax_percentage"]')).not.toHaveValue('10120018');
+  });
 });
