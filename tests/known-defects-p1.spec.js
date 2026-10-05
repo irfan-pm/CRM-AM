@@ -380,4 +380,78 @@ test.describe('Hisab Kitab 360 - External bug-list verification (P1)', () => {
     const accountSelectors = page.getByRole('combobox', { name: /account/i });
     await expect(accountSelectors).toHaveCount(2); // would need 2+ to actually split a payment
   });
+
+  // DEF-10 (Sales return, full) [KNOWN BUG]: a full return on a sale paid in
+  // full should keep the original payment record and add a separate refund
+  // entry - the money was genuinely received and then genuinely given back.
+  // CONFIRMED: fully returning a sale instead DELETES its payment/receipt
+  // row entirely from the customer's Payments tab, with no refund entry
+  // created anywhere - the payment count drops by exactly 1.
+  test('DEF-10: a full sales return does not delete the original payment receipt [KNOWN BUG]', async ({ page }) => {
+    await page.goto('/customers');
+    await page.getByPlaceholder('Search customer...').fill(KNOWN_CUSTOMER);
+    await page.waitForTimeout(500);
+    const row = page.locator('tbody tr', { hasText: KNOWN_CUSTOMER }).first();
+    await row.locator('.table-menu-more-option').click();
+    await expect(page.getByText('Details', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.getByText('Details', { exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Customer Details' })).toBeVisible({ timeout: 10_000 });
+
+    await page.getByRole('button', { name: 'ADD NEW SALE' }).click();
+    await expect(page.getByRole('heading', { name: 'Add Sale' })).toBeVisible({ timeout: 10_000 });
+
+    const productInput = page.getByRole('combobox', { name: 'Product Name' });
+    const batchOption = page.locator('.batch-select-option').first();
+    await productInput.click();
+    await productInput.fill(KNOWN_SALE_PRODUCT);
+    const option = page.getByText(KNOWN_SALE_PRODUCT, { exact: true }).last();
+    await expect(option).toBeVisible({ timeout: 15_000 });
+    await option.click();
+    const batchDialogOpen = await batchOption.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true).catch(() => false);
+    if (batchDialogOpen) await batchOption.click();
+
+    await page.locator('input[name="quantity"]').fill('2');
+    await page.getByRole('button', { name: 'ADD ITEM' }).click();
+    await expect(page.getByText('No Item found')).not.toBeVisible();
+
+    const netBillText = await page.getByText('Net Bill Amount', { exact: false }).locator('xpath=..').innerText();
+    const netBill = netBillText.match(/([\d,]+\.\d{2})/)[1].replace(/,/g, '');
+    const receivedInput = page.locator('text=Received Amount').locator('xpath=following::input[1]');
+    await receivedInput.fill(netBill); // pay the full bill, so a real receipt exists to check
+
+    await page.getByRole('button', { name: 'SAVE & EXIT' }).click();
+    await page.waitForTimeout(1_500);
+    const receiptHeading = page.getByRole('heading', { name: 'Receipt Preview' });
+    if (await receiptHeading.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await receiptHeading.locator('xpath=following-sibling::*[1]').click();
+    }
+
+    await page.getByRole('tab', { name: 'Payments' }).click();
+    await page.waitForTimeout(800);
+    const paymentCountBefore = await page.locator('tbody tr').count();
+
+    await page.getByRole('tab', { name: 'Sales' }).click();
+    await page.waitForTimeout(800);
+    const saleRow = page.locator('tbody tr').first();
+    await saleRow.locator('.table-menu-more-option').click();
+    await expect(page.getByText('Manage Return Products', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.getByText('Manage Return Products', { exact: true }).click();
+    await page.waitForTimeout(1_000);
+
+    const returnRow = page.locator('tbody tr', { hasText: KNOWN_SALE_PRODUCT }).first();
+    await returnRow.locator('input[type="checkbox"]').check();
+    await returnRow.locator('input[type="number"]').fill('2'); // full return - all units
+    await page.waitForTimeout(500);
+    await page.getByRole('button', { name: 'SUBMIT' }).click();
+    await page.waitForTimeout(1_500);
+
+    await page.getByRole('tab', { name: 'Payments' }).click();
+    await page.waitForTimeout(800);
+    const paymentCountAfter = await page.locator('tbody tr').count();
+
+    // Correct: the original receipt stays (same count, or +1 if a refund
+    // entry is also added). Buggy actual: count drops by 1 - the receipt
+    // was deleted outright.
+    expect(paymentCountAfter).toBeGreaterThanOrEqual(paymentCountBefore);
+  });
 });
