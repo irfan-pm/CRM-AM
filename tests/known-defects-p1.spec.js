@@ -355,4 +355,29 @@ test.describe('Hisab Kitab 360 - External bug-list verification (P1)', () => {
     await page.waitForTimeout(1_000);
     await expect(page.locator('tbody tr', { hasText: name })).toBeVisible({ timeout: 10_000 });
   });
+
+  // DEF-09 (POS payment) [KNOWN BUG]: true split-tender (paying one bill
+  // across multiple payment methods/accounts, e.g. part cash + part card)
+  // should be possible. CONFIRMED: Payment Mode does offer a "Mixed"
+  // option, but selecting it only shows a single "Select Bank Account"
+  // field - there is no way to enter more than one tender/account, so a
+  // bill still cannot actually be split across two or more payments.
+  test('DEF-09: "Mixed" Payment Mode allows entering more than one tender/account [KNOWN BUG]', async ({ page }) => {
+    await page.goto('/pos_invoicing/add_pos_invoicing');
+    await page.getByLabel('Name', { exact: true }).fill(`QA3_DEF09_${Date.now()}`);
+    await addPosProduct(page, 1);
+    await fillReceivedAmount(page, 500);
+
+    const paymentModeDropdown = page.getByRole('combobox', { name: 'Payment Mode' });
+    await paymentModeDropdown.scrollIntoViewIfNeeded();
+    await paymentModeDropdown.click();
+    await page.getByRole('option', { name: 'Mixed', exact: true }).click();
+    await page.waitForTimeout(800);
+
+    // Correct: a second tender/account entry (amount + account, so two
+    // payments can sum to the bill) should be addable. Buggy actual: only
+    // one "Select Account" combobox exists even in Mixed mode.
+    const accountSelectors = page.getByRole('combobox', { name: /account/i });
+    await expect(accountSelectors).toHaveCount(2); // would need 2+ to actually split a payment
+  });
 });
