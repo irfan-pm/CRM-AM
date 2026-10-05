@@ -11,6 +11,12 @@ const { login } = require('./utils/auth');
 // on the original account.
 
 const KNOWN_PRODUCT = 'Test panadol';
+const KNOWN_CUSTOMER = 'Co-work';
+const KNOWN_SALE_PRODUCT = 'Johathan Bauch';
+
+function amountInputNear(page, labelText) {
+  return page.locator(`text=${labelText}`).locator('xpath=following::input[1]');
+}
 
 async function addPosProduct(page, qty) {
   const productInput = page.getByRole('combobox', { name: 'Product Name' });
@@ -68,5 +74,78 @@ test.describe('Hisab Kitab 360 - External bug-list verification (P1)', () => {
     await searchBox.fill(name).catch(() => {});
     await page.waitForTimeout(1_000);
     await expect(page.locator('tbody tr', { hasText: name })).toHaveCount(0);
+  });
+
+  // DEF-02 (Sales return, partial) [KNOWN BUG]: a partial return should only
+  // remove the value of the returned items - the sale's Delivery Charges
+  // should remain. CONFIRMED on this account: returning 2 of 4 units from a
+  // sale (4x Rs 238 = Rs 952 + Rs 200 Delivery = Rs 1,152 Net Bill) silently
+  // drops the Rs 200 Delivery Charge entirely - the sale's Net Bill after
+  // the return shows only the remaining item value (Rs 476), not Rs 676
+  // (476 + the delivery charge that should still apply). This test encodes
+  // the CORRECT expected Net Bill and will fail until fixed.
+  test('DEF-02: a partial sales return keeps the Delivery Charge on the remaining bill [KNOWN BUG]', async ({ page }) => {
+    await page.goto('/customers');
+    await page.getByPlaceholder('Search customer...').fill(KNOWN_CUSTOMER);
+    await page.waitForTimeout(500);
+    const row = page.locator('tbody tr', { hasText: KNOWN_CUSTOMER }).first();
+    await row.locator('.table-menu-more-option').click();
+    await expect(page.getByText('Details', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.getByText('Details', { exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Customer Details' })).toBeVisible({ timeout: 10_000 });
+
+    await page.getByRole('button', { name: 'ADD NEW SALE' }).click();
+    await expect(page.getByRole('heading', { name: 'Add Sale' })).toBeVisible({ timeout: 10_000 });
+
+    const productInput = page.getByRole('combobox', { name: 'Product Name' });
+    const batchOption = page.locator('.batch-select-option').first();
+    await productInput.click();
+    await productInput.fill(KNOWN_SALE_PRODUCT);
+    const option = page.getByText(KNOWN_SALE_PRODUCT, { exact: true }).last();
+    await expect(option).toBeVisible({ timeout: 15_000 });
+    await option.click();
+    // Costing Method currently does not force a batch pick for this product -
+    // select one only if the dialog actually appears.
+    const batchDialogOpen = await batchOption.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true).catch(() => false);
+    if (batchDialogOpen) await batchOption.click();
+
+    await page.locator('input[name="quantity"]').fill('4');
+    await page.getByRole('button', { name: 'ADD ITEM' }).click();
+    await expect(page.getByText('No Item found')).not.toBeVisible();
+
+    await amountInputNear(page, 'Delivery Charges').fill('200');
+    await page.waitForTimeout(500);
+
+    const netBillRow = page.getByText('Net Bill Amount', { exact: false }).locator('xpath=..');
+    await expect(netBillRow).toContainText('1152.00'); // (4 x 238) + 200 delivery
+
+    await page.getByRole('button', { name: 'SAVE & EXIT' }).click();
+    await page.waitForTimeout(1_500);
+    const receiptHeading = page.getByRole('heading', { name: 'Receipt Preview' });
+    if (await receiptHeading.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await receiptHeading.locator('xpath=following-sibling::*[1]').click();
+    }
+
+    await page.getByRole('tab', { name: 'Sales' }).click();
+    await page.waitForTimeout(800);
+    const saleRow = page.locator('tbody tr').first();
+    await saleRow.locator('.table-menu-more-option').click();
+    await expect(page.getByText('Manage Return Products', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await page.getByText('Manage Return Products', { exact: true }).click();
+    await page.waitForTimeout(1_000);
+
+    const returnRow = page.locator('tbody tr', { hasText: KNOWN_SALE_PRODUCT }).first();
+    await returnRow.locator('input[type="checkbox"]').check();
+    await returnRow.locator('input[type="number"]').fill('2');
+    await page.waitForTimeout(500);
+    await page.getByRole('button', { name: 'SUBMIT' }).click();
+    await page.waitForTimeout(1_500);
+
+    await page.getByRole('tab', { name: 'Sales' }).click();
+    await page.waitForTimeout(800);
+    // Correct: (4-2) x 238 remaining item value + the Rs 200 Delivery Charge
+    // that should still apply = Rs 676. Buggy actual: Rs 476 (delivery
+    // dropped entirely).
+    await expect(page.locator('tbody tr').first()).toContainText('676.00');
   });
 });
