@@ -454,4 +454,31 @@ test.describe('Hisab Kitab 360 - External bug-list verification (P1)', () => {
     // was deleted outright.
     expect(paymentCountAfter).toBeGreaterThanOrEqual(paymentCountBefore);
   });
+
+  // DEF-12 (Security) [KNOWN BUG]: no secret should be shipped in client JS;
+  // Groq (AI) calls should go through the server only. CONFIRMED: the main
+  // JS bundle contains REACT_APP_API_KEY, REACT_APP_EDITOR_KEY,
+  // REACT_APP_GOOGLE_MAPS_API_KEY and REACT_APP_GROQ_API_KEY in plain text
+  // (a classic Create React App misconfiguration - any REACT_APP_* env var
+  // is baked into the public bundle at build time, so these should never
+  // have held real secrets). This test checks for the KEY PATTERNS, not the
+  // literal captured secret values, to avoid persisting the real keys in
+  // this repo.
+  test('DEF-12: the shipped client JS bundle does not contain API secret keys [KNOWN BUG]', async ({ page, request }) => {
+    await page.goto('/');
+    const scriptSrc = await page.locator('script[src*="main"]').getAttribute('src');
+    expect(scriptSrc).toBeTruthy();
+    const bundleUrl = new URL(scriptSrc, page.url()).toString();
+
+    const response = await request.get(bundleUrl);
+    const bundleText = await response.text();
+
+    // A Google Maps key (AIzaSy... prefix) and a Groq key (gsk_... prefix)
+    // should never appear in client-shipped code. Check as booleans (not
+    // raw toMatch/toContain on the multi-MB bundle) so a failure doesn't
+    // dump the entire bundle into the test report.
+    expect(/AIzaSy[A-Za-z0-9_-]{20,}/.test(bundleText), 'Google Maps API key found in bundle').toBe(false);
+    expect(/gsk_[A-Za-z0-9]{20,}/.test(bundleText), 'Groq API key found in bundle').toBe(false);
+    expect(bundleText.includes('REACT_APP_EDITOR_KEY'), 'REACT_APP_EDITOR_KEY found in bundle').toBe(false);
+  });
 });
